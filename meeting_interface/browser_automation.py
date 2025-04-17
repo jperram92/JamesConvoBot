@@ -17,6 +17,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from meeting_interface.audio_handler import AudioHandler
+from meeting_interface.chat_handler import ChatHandler
 from meeting_interface.command_recognition import CommandRecognizer
 from meeting_interface.speech_recognition import SpeechRecognizer
 from meeting_interface.summarization import MeetingSummarizer
@@ -50,6 +51,7 @@ class BrowserAutomation:
         self.speech_recognizer = SpeechRecognizer(browser_automation=self)
         self.audio_handler = AudioHandler(speech_recognizer=self.speech_recognizer)
         self.command_recognizer = CommandRecognizer(browser_automation=self)
+        self.chat_handler = ChatHandler(browser_automation=self)
         self.meeting_summarizer = MeetingSummarizer()
         self.is_in_meeting = False
         self.meeting_start_time = None
@@ -326,6 +328,10 @@ class BrowserAutomation:
                 self.command_recognizer.stop_monitoring()
                 logger.info("Stopped command recognition")
 
+                # Stop chat handler if active
+                self.chat_handler.stop_monitoring()
+                logger.info("Stopped chat handler")
+
             # Add final transcript entry
             if self.is_in_meeting:
                 timestamp = datetime.now().strftime("%H:%M:%S")
@@ -414,6 +420,9 @@ class BrowserAutomation:
         # Start command recognition
         self.command_recognizer.start_monitoring()
 
+        # Start chat handler
+        self.chat_handler.start_monitoring()
+
         # Add initial transcript entry
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.meeting_transcript.append(f"[{timestamp}] Meeting started")
@@ -423,51 +432,17 @@ class BrowserAutomation:
         max_retries = 3
         for retry in range(max_retries):
             try:
-                # Try different chat button selectors
-                chat_button_selectors = [
-                    "//div[@aria-label='Chat with everyone']",
-                    "//button[@aria-label='Chat with everyone']",
-                    "//button[contains(@aria-label, 'chat')]",
-                    "//div[contains(@aria-label, 'chat')]",
-                    "//span[contains(text(), 'Chat')]/parent::div",
-                    "//div[contains(@data-tooltip, 'Chat')]",
-                    "//button[contains(@data-tooltip, 'Chat')]",
-                    "//div[contains(@class, 'chat')]",
-                    "//button[contains(@class, 'chat')]"
-                ]
-
-                chat_button = None
-                for selector in chat_button_selectors:
-                    chat_button = self._wait_for_element(selector, timeout=2)
-                    if chat_button:
-                        try:
-                            chat_button.click()
-                            logger.info(f"Opened chat using selector: {selector}")
-                            break
-                        except Exception as e:
-                            logger.warning(f"Failed to click chat button with selector {selector}: {e}")
-
-                if not chat_button:
-                    # Try clicking by JavaScript as a fallback
-                    for selector in chat_button_selectors:
-                        try:
-                            element = self.driver.find_element(By.XPATH, selector)
-                            self.driver.execute_script("arguments[0].click();", element)
-                            logger.info(f"Opened chat using JavaScript click on selector: {selector}")
-                            chat_button = True
-                            break
-                        except Exception:
-                            pass
-
-                if not chat_button:
-                    logger.warning(f"Could not find chat button on attempt {retry+1}")
+                # First, make sure the chat panel is open
+                chat_panel_opened = self._ensure_chat_panel_open()
+                if not chat_panel_opened:
+                    logger.warning(f"Could not open chat panel on attempt {retry+1}")
                     if retry < max_retries - 1:
                         time.sleep(2)
                         continue
                     return False
 
                 # Wait for chat input field
-                time.sleep(2)
+                time.sleep(1)
 
                 # Try different chat input selectors
                 chat_input_selectors = [
@@ -477,14 +452,21 @@ class BrowserAutomation:
                     "//textarea[contains(@placeholder, 'message')]",
                     "//textarea[contains(@placeholder, 'Send')]",
                     "//div[contains(@class, 'chat-input')]",
-                    "//div[contains(@class, 'message-input')]"
+                    "//div[contains(@class, 'message-input')]",
+                    "//div[contains(@class, 'editable')]",  # Editable div
+                    "//div[contains(@class, 'VfPpkd-fmcmS-yrriRe')]",  # Google Meet specific
+                    "//div[contains(@jsname, 'YPqjbf')]",  # Google Meet specific
+                    "//div[contains(@jscontroller, 'yQsW8d')]",  # Google Meet specific
                 ]
 
                 chat_input = None
                 for selector in chat_input_selectors:
-                    chat_input = self._wait_for_element(selector, timeout=2)
-                    if chat_input:
-                        break
+                    try:
+                        chat_input = self.driver.find_element(By.XPATH, selector)
+                        if chat_input and chat_input.is_displayed():
+                            break
+                    except Exception:
+                        pass
 
                 if not chat_input:
                     logger.warning(f"Could not find chat input field on attempt {retry+1}")
@@ -493,19 +475,68 @@ class BrowserAutomation:
                         continue
                     return False
 
-                # Clear any existing text
-                chat_input.clear()
+                # Try different methods to send the message
+                try:
+                    # Method 1: Clear and send keys
+                    try:
+                        chat_input.clear()
+                        chat_input.send_keys(message)
+                        time.sleep(0.5)  # Small delay to ensure text is entered
+                        chat_input.send_keys(Keys.ENTER)
+                        logger.info(f"Sent chat message (method 1): {message}")
+                        time.sleep(1)  # Wait for message to be sent
+                        return True
+                    except Exception as e:
+                        logger.warning(f"Method 1 failed: {e}")
 
-                # Type and send message
-                chat_input.send_keys(message)
-                time.sleep(0.5)  # Small delay to ensure text is entered
-                chat_input.send_keys(Keys.ENTER)
-                logger.info(f"Sent chat message: {message}")
+                    # Method 2: JavaScript to set value and trigger enter
+                    try:
+                        self.driver.execute_script("arguments[0].value = arguments[1];", chat_input, message)
+                        self.driver.execute_script("arguments[0].dispatchEvent(new KeyboardEvent('keydown', {'key': 'Enter'}));", chat_input)
+                        logger.info(f"Sent chat message (method 2): {message}")
+                        time.sleep(1)  # Wait for message to be sent
+                        return True
+                    except Exception as e:
+                        logger.warning(f"Method 2 failed: {e}")
 
-                # Wait a moment to ensure message is sent
-                time.sleep(1)
+                    # Method 3: Try to find a send button
+                    send_button_selectors = [
+                        "//button[contains(@aria-label, 'Send')]",
+                        "//div[contains(@aria-label, 'Send')]",
+                        "//button[contains(@data-tooltip, 'Send')]",
+                        "//div[contains(@data-tooltip, 'Send')]",
+                        "//span[contains(text(), 'Send')]/parent::button",
+                        "//span[contains(text(), 'Send')]/parent::div"
+                    ]
 
-                return True
+                    for selector in send_button_selectors:
+                        try:
+                            send_button = self.driver.find_element(By.XPATH, selector)
+                            if send_button and send_button.is_displayed():
+                                # Set the message text first
+                                chat_input.send_keys(message)
+                                time.sleep(0.5)  # Small delay
+                                # Click the send button
+                                send_button.click()
+                                logger.info(f"Sent chat message (method 3): {message}")
+                                time.sleep(1)  # Wait for message to be sent
+                                return True
+                        except Exception:
+                            pass
+
+                    # If we got here, all methods failed
+                    logger.warning("All methods to send chat message failed")
+                    if retry < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    return False
+
+                except Exception as e:
+                    logger.error(f"Error sending chat message on attempt {retry+1}: {e}")
+                    if retry < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    return False
 
             except Exception as e:
                 logger.error(f"Error sending chat message on attempt {retry+1}: {e}")
@@ -515,6 +546,68 @@ class BrowserAutomation:
                 return False
 
         return False
+
+    def _ensure_chat_panel_open(self) -> bool:
+        """Make sure the chat panel is open."""
+        try:
+            # Check if chat panel is already open
+            chat_input_selectors = [
+                "//textarea[@aria-label='Send a message to everyone']",
+                "//textarea[contains(@aria-label, 'message')]",
+                "//div[@role='textbox']",
+                "//div[contains(@class, 'chat-input')]"
+            ]
+
+            for selector in chat_input_selectors:
+                try:
+                    chat_input = self.driver.find_element(By.XPATH, selector)
+                    if chat_input and chat_input.is_displayed():
+                        # Chat panel is already open
+                        return True
+                except Exception:
+                    pass
+
+            # Chat panel not open, try to open it
+            chat_button_selectors = [
+                "//button[@aria-label='Chat with everyone']",
+                "//div[@aria-label='Chat with everyone']",
+                "//button[contains(@aria-label, 'chat')]",
+                "//div[contains(@aria-label, 'chat')]",
+                "//span[contains(text(), 'Chat')]/parent::div",
+                "//div[contains(@data-tooltip, 'Chat')]",
+                "//button[contains(@data-tooltip, 'Chat')]",
+                "//div[contains(@class, 'chat')]",
+                "//button[contains(@class, 'chat')]"
+            ]
+
+            for selector in chat_button_selectors:
+                try:
+                    chat_button = self.driver.find_element(By.XPATH, selector)
+                    if chat_button and chat_button.is_displayed():
+                        chat_button.click()
+                        logger.info(f"Opened chat panel using selector: {selector}")
+                        time.sleep(1)  # Wait for chat panel to open
+                        return True
+                except Exception:
+                    pass
+
+            # Try JavaScript click as a last resort
+            for selector in chat_button_selectors:
+                try:
+                    element = self.driver.find_element(By.XPATH, selector)
+                    self.driver.execute_script("arguments[0].click();", element)
+                    logger.info(f"Opened chat panel using JavaScript click on selector: {selector}")
+                    time.sleep(1)  # Wait for chat panel to open
+                    return True
+                except Exception:
+                    pass
+
+            logger.warning("Could not open chat panel")
+            return False
+
+        except Exception as e:
+            logger.warning(f"Error ensuring chat panel is open: {e}")
+            return False
 
     def _enable_captions(self) -> bool:
         """Enable captions in the meeting."""
@@ -605,6 +698,8 @@ class BrowserAutomation:
         if self.command_recognizer and hasattr(self.command_recognizer, 'process_transcript_line'):
             self.command_recognizer.process_transcript_line(line)
 
+
+
     def get_chat_messages(self) -> list:
         """Get chat messages from the meeting."""
         try:
@@ -612,7 +707,10 @@ class BrowserAutomation:
             chat_message_selectors = [
                 "//div[@data-sender-name]//div[@data-message-text]",
                 "//div[contains(@class, 'chat-message')]",
-                "//div[contains(@class, 'message-container')]"
+                "//div[contains(@class, 'message-container')]",
+                "//div[contains(@class, 'GDhqjd')]",  # Google Meet specific class
+                "//div[contains(@class, 'oIy2qc')]",  # Google Meet specific class
+                "//div[contains(@aria-label, 'Chat message')]"
             ]
 
             messages = []
@@ -622,8 +720,22 @@ class BrowserAutomation:
                     if elements:
                         for element in elements:
                             try:
-                                sender = element.get_attribute("data-sender-name") or "Unknown"
-                                text = element.get_attribute("data-message-text") or element.text
+                                # Try to get sender and text from attributes
+                                sender = element.get_attribute("data-sender-name")
+                                text = element.get_attribute("data-message-text")
+
+                                # If attributes not available, try to parse from text
+                                if not sender or not text:
+                                    # Try to parse from element text
+                                    full_text = element.text
+                                    if ":" in full_text:
+                                        parts = full_text.split(":", 1)
+                                        sender = parts[0].strip()
+                                        text = parts[1].strip()
+                                    else:
+                                        sender = "Unknown"
+                                        text = full_text
+
                                 if text and sender:
                                     messages.append({"sender": sender, "text": text})
                             except Exception:
