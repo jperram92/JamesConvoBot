@@ -1,0 +1,74 @@
+# AI Meeting Assistant Configuration Template
+# Copy this file to config.yaml and fill in your actual API keys and settings
+
+# API Keys and Authentication
+api_keys:
+  openai:
+    api_key: "your_openai_api_key_here"
+  google:
+    client_id: "your_google_client_id_here"
+    client_secret: "your_google_client_secret_here"
+    project_id: "your_google_project_id_here"
+  aws:
+    access_key_id: "your_aws_access_key_id_here"
+    secret_access_key: "your_aws_secret_access_key_here"
+    region: "us-east-1"
+
+# LLM Configuration
+llm:
+  model: "gpt-4"  # or "gpt-3.5-turbo"
+  temperature: 0.7
+  max_tokens: 1000
+  system_prompt: "You are Augment, an AI meeting assistant. You help with meeting transcription, answering questions, and providing summaries."
+
+# Audio Configuration
+audio:
+  stt:
+    provider: "openai"  # or "google"
+    language: "en-US"
+    sample_rate: 16000
+    chunk_size: 1024
+  tts:
+    provider: "google"  # or "aws"
+    voice: "en-US-Neural2-F"
+    speaking_rate: 1.0
+    pitch: 0.0
+
+# Google Meet Configuration
+google_meet:
+  headless: true
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  join_audio: true
+  join_video: false
+  auto_join: true
+
+# Agent Configuration
+agent:
+  name: "Augment"
+  trigger_word: "Augment"
+  response_threshold: 0.7
+  tools:
+    web_search: true
+    email: true
+    data_query: true
+
+# Summarization Configuration
+summarization:
+  generate_action_items: true
+  include_timestamps: true
+  summary_length: "medium"  # "short", "medium", "long"
+  email_summary: true
+
+# Security and Privacy
+security:
+  encrypt_transcripts: true
+  data_retention_days: 30
+  consent_required: true
+  pii_filtering: true
+
+# Logging
+logging:
+  level: "INFO"  # "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+  file: "logs/assistant.log"
+  max_size_mb: 10
+  backup_count: 5

@@ -1,0 +1,41 @@
+# Core dependencies
+langchain>=0.0.267
+openai>=1.0.0
+python-dotenv>=1.0.0
+
+# Google Meet integration
+selenium>=4.10.0
+undetected-chromedriver>=3.5.0
+webdriver-manager>=3.8.6
+
+# Audio processing
+sounddevice>=0.4.6
+numpy>=1.24.0
+pydub>=0.25.1
+pyaudio>=0.2.13
+SpeechRecognition>=3.10.0
+
+# Google API integration
+google-api-python-client>=2.100.0
+google-auth>=2.22.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+
+# Web search
+googlesearch-python>=1.2.3
+duckduckgo-search>=3.8.5
+
+# Utilities
+pyyaml>=6.0.0
+requests>=2.31.0
+python-dateutil>=2.8.2
+tqdm>=4.66.1
+
+# Text-to-Speech
+gTTS>=2.3.2
+boto3>=1.28.53  # For Amazon Polly
+
+# Optional: for development
+pytest>=7.4.0
+black>=23.7.0
+isort>=5.12.0
