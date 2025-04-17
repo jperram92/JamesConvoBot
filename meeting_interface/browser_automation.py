@@ -17,6 +17,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from meeting_interface.audio_handler import AudioHandler
+from meeting_interface.command_recognition import CommandRecognizer
+from meeting_interface.speech_recognition import SpeechRecognizer
+from meeting_interface.summarization import MeetingSummarizer
 from utils.config import get_config
 from utils.logging_utils import logger
 
@@ -44,10 +47,14 @@ class BrowserAutomation:
 
         # Initialize components
         self.driver = None
-        self.audio_handler = AudioHandler()
+        self.speech_recognizer = SpeechRecognizer(browser_automation=self)
+        self.audio_handler = AudioHandler(speech_recognizer=self.speech_recognizer)
+        self.command_recognizer = CommandRecognizer(browser_automation=self)
+        self.meeting_summarizer = MeetingSummarizer()
         self.is_in_meeting = False
         self.meeting_start_time = None
         self.meeting_transcript = []
+        self.is_transcribing = config.get('google_meet.auto_transcribe', True)
 
         logger.info("Initialized browser automation")
 
@@ -309,13 +316,33 @@ class BrowserAutomation:
                 if recording_file:
                     logger.info(f"Saved meeting recording to {recording_file}")
 
-                # Save transcript if available
-                if self.meeting_transcript:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    transcript_file = os.path.join("recordings", f"transcript_{timestamp}.txt")
-                    with open(transcript_file, "w") as f:
-                        f.write("\n".join(self.meeting_transcript))
-                    logger.info(f"Saved meeting transcript to {transcript_file}")
+            # Stop speech recognition if active
+            if self.is_in_meeting and self.is_transcribing:
+                self.speech_recognizer.stop_recognition()
+                logger.info("Stopped speech recognition")
+
+            # Stop command recognition if active
+            if self.is_in_meeting:
+                self.command_recognizer.stop_monitoring()
+                logger.info("Stopped command recognition")
+
+            # Add final transcript entry
+            if self.is_in_meeting:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                self.meeting_transcript.append(f"[{timestamp}] Meeting ended")
+
+            # Save transcript if available
+            if self.meeting_transcript:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                transcript_file = os.path.join("recordings", f"transcript_{timestamp}.txt")
+                with open(transcript_file, "w") as f:
+                    f.write("\n".join(self.meeting_transcript))
+                logger.info(f"Saved meeting transcript to {transcript_file}")
+
+                # Generate meeting summary
+                summary_file = self.meeting_summarizer.generate_meeting_summary_file(transcript_file)
+                if summary_file:
+                    logger.info(f"Generated meeting summary: {summary_file}")
 
             # Reset meeting state
             self.is_in_meeting = False
@@ -368,13 +395,28 @@ class BrowserAutomation:
         logger.info("Starting active meeting participation")
 
         # Send a greeting message in the chat
-        self._send_chat_message("Hello! I'm the AI Meeting Assistant. I'm here to take notes and assist with the meeting.")
-
-        # TODO: Start a thread for continuous monitoring and participation
-        # For now, we'll just do some basic setup
+        greeting = config.get('agent.greeting_message',
+            "Hello! I'm the AI Meeting Assistant. I'm here to take notes and assist with the meeting.\n"
+            f"You can give me commands by saying '{self.command_recognizer.trigger_word} command'.\n"
+            f"Try '{self.command_recognizer.trigger_word} help' for a list of available commands."
+        )
+        self._send_chat_message(greeting)
 
         # Check if captions are available and enable them
-        self._enable_captions()
+        if config.get('google_meet.enable_captions', True):
+            self._enable_captions()
+
+        # Start speech recognition if transcription is enabled
+        if self.is_transcribing:
+            self.speech_recognizer.start_recognition()
+            logger.info("Started speech recognition")
+
+        # Start command recognition
+        self.command_recognizer.start_monitoring()
+
+        # Add initial transcript entry
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.meeting_transcript.append(f"[{timestamp}] Meeting started")
 
     def _send_chat_message(self, message: str) -> bool:
         """Send a message in the meeting chat."""
@@ -558,6 +600,42 @@ class BrowserAutomation:
         line = f"[{timestamp}] {speaker}: {text}"
         self.meeting_transcript.append(line)
         logger.info(f"Added to transcript: {line}")
+
+        # Check if this is a command
+        if self.command_recognizer and hasattr(self.command_recognizer, 'process_transcript_line'):
+            self.command_recognizer.process_transcript_line(line)
+
+    def get_chat_messages(self) -> list:
+        """Get chat messages from the meeting."""
+        try:
+            # Try different chat message selectors
+            chat_message_selectors = [
+                "//div[@data-sender-name]//div[@data-message-text]",
+                "//div[contains(@class, 'chat-message')]",
+                "//div[contains(@class, 'message-container')]"
+            ]
+
+            messages = []
+            for selector in chat_message_selectors:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                    if elements:
+                        for element in elements:
+                            try:
+                                sender = element.get_attribute("data-sender-name") or "Unknown"
+                                text = element.get_attribute("data-message-text") or element.text
+                                if text and sender:
+                                    messages.append({"sender": sender, "text": text})
+                            except Exception:
+                                pass
+                        break
+                except Exception:
+                    pass
+
+            return messages
+        except Exception as e:
+            logger.warning(f"Error getting chat messages: {e}")
+            return []
 
     def _wait_for_element(self, xpath: str, timeout: int = 10) -> Optional[object]:
         """
